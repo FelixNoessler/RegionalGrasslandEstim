@@ -2,8 +2,11 @@ library(JuliaCall)
 library(BayesianTools)
 
 prepare_julia <- function(){
-    julia_command('import Pkg; Pkg.activate(".");')
-    julia_source('4_scripts/run model/validation.jl')
+    julia_eval('if isdir("Grassland_data_analysis") cd("Grassland_data_analysis"); end')
+    julia_eval('import Pkg; Pkg.activate(".")')
+    julia_command('import RegionalGrasslandSim as sim')
+    julia_command('using RegionalGrasslandValid')
+    julia_call("set_datapath", "../RegionalGrasslandData")
 }
 
 #--------------------------------------------
@@ -27,15 +30,15 @@ parameter_names <- c(
     "max_SRSA_nut_reduction")
 
 prior <- createTruncatedNormalPrior(
-            # σ_bio   σ_ev σ_mo m_c  s_i   s_r below  tram   graz  mow    SRSA SLA  AMC  SRSA_n
-    mean =  c(10000,  10,  10,  0.8, 0.1,  1,  0.001, 1,     1,    1,     0.2, 0.5, 0.5, 0.5),
-    sd =    c(100,    10,  10,  0.2, 5,    5,  0.01,  0.2,   0.2,  0.2,   0.2, 0.2, 0.2, 0.2),
+            # σ_bio   σ_ev σ_mo m_c  s_i   s_r below  tram   graz  mow  SRSA SLA  AMC  SRSA_n
+    mean =  c(10000,  10,  10,  0.8, 0.1,  1,  0.001, 1,     1,    1,   0.2, 0.5, 0.5, 0.5),
+    sd =    c(100,    10,  10,  0.2, 5,    5,  0.01,  0.2,   0.2,  0.2, 0.2, 0.2, 0.2, 0.2),
     lower = c(0.1,    0.1, 0.1, 0.1, 0,    0,  0.0,   0.1,   0.1,  0.1, 0.0, 0.0, 0.0, 0.0), 
     upper = c(100000, 100, 100, 1.2, 10,   10, 0.01,  5,     5,    5,   1.0, 1.0, 1.0, 1.0))
 
 ll <- function(param){
 
-    prepared <- julia_eval('@isdefined ModelValidation')
+    prepared <- julia_eval('@isdefined RegionalGrasslandValid')
     if (! prepared){
         prepare_julia()
     } 
@@ -44,8 +47,9 @@ ll <- function(param){
     loglik = 0
     for (plotID in selected_plots){
         loglik_plot = julia_do.call(
-            "ModelValidation.loglikelihood_model",
+            "loglikelihood_model", 
             list(
+                julia_eval("sim"),
                 plotID=plotID,
                 inf_p=param_list,
                 startyear=2012,
@@ -56,13 +60,12 @@ ll <- function(param){
     return(loglik)
 }
 
-# ll(c(1000,2,3, 100, 0.005, 0.05, 0.001, 0.02, 0.9, 0.8, 0.8, 0.8))
+# test_p <- prior$sampler()
 # start_time <- Sys.time()
-# ll(c(1000,2, 3, 100, 0.005, 0.05, 0.001, 1, 1, 0.02, 0.9, 0.8, 0.8, 0.8))
+# ll(test_p)
 # end_time <- Sys.time()
 # end_time - start_time
-# test_p <- prior$sampler()
-# ll(test_p)
+
 
 bayesianSetup = createBayesianSetup(
     likelihood = ll, 
@@ -80,11 +83,11 @@ out <- runMCMC(
     bayesianSetup = bayesianSetup, 
     sampler = "DREAMzs", 
     settings = list(
-        iterations = 2000, 
+        iterations = 20000, 
         message = T, 
-        nrChains = 1,
+        nrChains = 2,
         burnin = 0))
-stopParallel(bayesianSetup)
+# stopParallel(bayesianSetup)
 
 # summary(out)
 plot(out)
