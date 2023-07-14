@@ -2,16 +2,15 @@ library(JuliaCall)
 library(BayesianTools)
 
 prepare_julia <- function(){
-    julia_eval('if isdir("Grassland_data_analysis") cd("Grassland_data_analysis"); end')
-    julia_eval('import Pkg; Pkg.activate(".")')
+    # julia_command('if isdir("Grassland_data_analysis") cd("Grassland_data_analysis"); end')
+    # julia_command('import Pkg; Pkg.activate(".")')
     julia_command('import RegionalGrasslandSim as sim')
     julia_command('using RegionalGrasslandValid')
-    julia_call("set_datapath", "../RegionalGrasslandData")
 }
 
 #--------------------------------------------
-df <- expand.grid(id=1:9, explo=c("HEG", "AEG", "SEG"))
-selected_plots <- paste0(df$explo, "0", df$id)
+# df <- expand.grid(id=1:9, explo=c("HEG", "AEG", "SEG"))
+# selected_plots <- paste0(df$explo, "0", df$id)
 
 parameter_names <- c(
     "sigma_biomass",
@@ -22,44 +21,31 @@ parameter_names <- c(
     "senescence_rate",
     "below_competition_strength",
     "trampling_factor", 
-    "grazing_factor",
-    "mowing_factor",
+    "grazing_half_factor",
+    "mowing_mid_days",
     "max_SRSA_water_reduction",
     "max_SLA_water_reduction",
     "max_AMC_nut_reduction",
     "max_SRSA_nut_reduction")
 
 prior <- createTruncatedNormalPrior(
-            # σ_bio   σ_ev σ_mo m_c  s_i   s_r below  tram   graz  mow  SRSA SLA  AMC  SRSA_n
-    mean =  c(10000,  10,  10,  0.8, 0.1,  1,  0.001, 1,     1,    1,   0.2, 0.5, 0.5, 0.5),
-    sd =    c(100,    10,  10,  0.2, 5,    5,  0.01,  0.2,   0.2,  0.2, 0.2, 0.2, 0.2, 0.2),
-    lower = c(0.1,    0.1, 0.1, 0.1, 0,    0,  0.0,   0.1,   0.1,  0.1, 0.0, 0.0, 0.0, 0.0), 
-    upper = c(100000, 100, 100, 1.2, 10,   10, 0.01,  5,     5,    5,   1.0, 1.0, 1.0, 1.0))
+            # σ_bio   σ_ev σ_mo m_c  s_i   s_r below   tram graz  mow  SRSA SLA  AMC  SRSA_n
+    mean =  c(0,      10,  10,  0.8, 0.001, 5,  0.001, 100, 1500, 40,   0.5, 0.5, 0.5, 0.5),
+    sd =    c(100000, 10,  10,  0.2, 0.1,   2,  0.01,  10,  100,  10,  0.2, 0.2, 0.2, 0.2),
+    lower = c(0.0,    0.0, 0.0, 0.1, 1e-6,  0,  0.0,   50,  500,  10,  0.0, 0.0, 0.0, 0.0), 
+    upper = c(100000, 100, 100, 1.2, 1e-1,  10, 0.01,  200, 5000, 150, 1.0, 1.0, 1.0, 1.0))
 
 ll <- function(param){
-
-    prepared <- julia_eval('@isdefined RegionalGrasslandValid')
-    if (! prepared){
-        prepare_julia()
-    } 
-
     param_list <- split(param, parameter_names)
-    loglik = 0
-    for (plotID in selected_plots){
-        loglik_plot = julia_do.call(
-            "loglikelihood_model", 
-            list(
-                julia_eval("sim"),
-                plotID=plotID,
-                inf_p=param_list,
-                startyear=2012,
-                endyear=2021))
-        loglik = loglik + loglik_plot
-    }
-
+    loglik <- julia_call(
+            "ll_VIPS_t", 
+            julia_eval("sim"),
+            inf_p=param_list)
     return(loglik)
 }
 
+prepare_julia()
+# julia_command("GC.gc()")
 # test_p <- prior$sampler()
 # start_time <- Sys.time()
 # ll(test_p)
@@ -71,28 +57,41 @@ bayesianSetup = createBayesianSetup(
     likelihood = ll, 
     prior = prior,
     names = parameter_names,
-    parallel = T,
-    parallelOptions = list(
-        packages = list("BayesianTools", "JuliaCall"),
-        variables = list(
-            "parameter_names", 
-            "selected_plots", 
-            "prepare_julia")))
+    parallel = F)
 
+
+
+############# DREAMzs , DEzs
 out <- runMCMC(
     bayesianSetup = bayesianSetup, 
-    sampler = "DREAMzs", 
+    sampler = "DREAMzs",  # DREAMzs , DEzs
     settings = list(
-        iterations = 20000, 
+        iterations = 3000, 
         message = T, 
-        nrChains = 2,
+        nrChains = 1,
         burnin = 0))
-# stopParallel(bayesianSetup)
 
+
+
+# filename = paste0(
+#     "/home/felix/Dokumente/Promotion/RegionalGrasslandValid/saved_chains/" , 
+#     format(Sys.time(), "%Y_%m_%d_smc_"), 
+#     length(parameter_names),
+#     "_1000.rds")
+# saveRDS(out, file = filename)
+
+# out <- readRDS("/home/felix/Dokumente/Promotion/RegionalGrasslandValid/saved_chains/2023_07_14_dream_14_30000.rds")
+
+# # out
+# # getSample(out)
 # summary(out)
-plot(out)
-# correlationPlot(out)
-marginalPlot(out, prior = TRUE)
-# marginalLikelihood(out)
-MAP(out)
 
+
+# tracePlot(out, start=5000)
+# # correlationPlot(out)
+# marginalPlot(out, prior = TRUE, start=1)
+# # marginalLikelihood(out)
+# MAP(out)
+
+
+# cat(unlist(MAP(out), use.names=F), sep=", ")

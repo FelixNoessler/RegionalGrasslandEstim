@@ -8,68 +8,142 @@ using Unitful
 using Distributions
 using LinearAlgebra
 
-export loglikelihood_model, get_plottingdata, get_validation_data, set_datapath
+export loglikelihood_model, get_plottingdata, get_validation_data
+export ll_VIPS_t, ll_VIPS
 
-datapath = ""
-
-function set_datapath(path::String)
-    global datapath = path
-    load_tables()
+struct GM
+    μ
+    Σ
+    ϕ
 end
 
-function load_tables()
+struct DataTables
+    soilwater
+    satbiomass
+    measuredveg
+    clim
+    pet
+    par
+    nut
+    soil
+    mow
+    graz
+end
+
+function __init__()
+    datapath = "../RegionalGrasslandData"
+    load_tables(datapath)
+end
+
+VIP_plots = ["$(explo)0$i" for i in 1:9 for explo in ["HEG", "SEG", "AEG"]];
+
+function load_tables(datapath)
+    @info "Loading data of RegionalGrasslandValid"
+
     ########### validation data
-    global soilwater_df = CSV.read(
+    soilwater_df = CSV.read(
         "$datapath/validation/soilwater.csv",
         DataFrame)
 
-    global satbiomass_df = CSV.read(
+    satbiomass_df = CSV.read(
         "$datapath/validation/sat_biomass.csv",
         DataFrame
     )
 
-    global measuredveg_df = CSV.read(
+    measuredveg_df = CSV.read(
         "$datapath/validation/measured_veg.csv",
         DataFrame
     )
 
     ########### input data
-    global clim_df = CSV.read(
+    clim_df = CSV.read(
         "$datapath/input/climate.csv",
         DataFrame)
 
-    global pet_df = CSV.read(
+    pet_df = CSV.read(
         "$datapath/input/PET.csv",
         DataFrame
     )
 
-    global par_df = CSV.read(
+    par_df = CSV.read(
         "$datapath/input/par.csv",
         DataFrame
     )
 
     ### mean index from 2011, 2014, 20117, 2021
-    global nut_df = CSV.read(
+    nut_df = CSV.read(
         "$datapath/input/soilnutrients.csv",
         DataFrame
     )
 
-    global soil_df = CSV.read(
+    soil_df = CSV.read(
         "$datapath/input/soilwater.csv",
         DataFrame
     )
 
-    global mow_df = CSV.read(
+    mow_df = CSV.read(
         "$datapath/input/mowing.csv",
         DataFrame
     )
 
-    global graz_df = CSV.read(
+    graz_df = CSV.read(
         "$datapath/input/grazing.csv",
         DataFrame
     )
 
+    global dat = DataTables(
+        soilwater_df,
+        satbiomass_df,
+        measuredveg_df,
+        clim_df,
+        pet_df,
+        par_df,
+        nut_df,
+        soil_df,
+        mow_df,
+        graz_df
+    )
+
+    ###### parameters for gaussian mixture model
+    μ, Σ, ϕ = load("$datapath/input/traits_gaussian_mixture.jld2", "μ", "Σ", "ϕ")
+    global gm = GM(μ, Σ, ϕ)
+
     return nothing
+end
+
+
+function ll_VIPS_t(sim; inf_p)
+    ll = Threads.Atomic{Float64}(0.0)
+    Threads.@threads for plotID in VIP_plots
+        ll_plot = loglikelihood_model(sim;
+            plotID,
+            inf_p,
+            startyear=2012,
+            endyear=2021)
+
+        Threads.atomic_add!(ll, ll_plot)
+    end
+
+    ### free RAM space
+    GC.gc()
+    ccall(:malloc_trim, Cvoid, (Cint,), 0)
+
+    return ll[]
+end
+
+function ll_VIPS(sim; inf_p)
+    ll = 0.0
+    for plotID in VIP_plots
+        ll_plot = loglikelihood_model(sim;
+            plotID,
+            inf_p,
+            startyear=2012,
+            endyear=2021)
+
+        ll += ll_plot
+    end
+
+    return ll
 end
 
 
@@ -95,12 +169,10 @@ function inverse_logit(x)
 end
 
 function random_traits(n; back_transform=true)
-    μ, Σ, ϕ = load("$datapath/input/traits_gaussian_mixture.jld2", "μ", "Σ", "ϕ")
-
     m = MixtureModel([
-        MvNormal(μ[1, :], Hermitian(Σ[1, :, :])),
-        MvNormal(μ[2, :], Hermitian(Σ[2, :, :]))],
-        ϕ
+        MvNormal(gm.μ[1, :], Hermitian(gm.Σ[1, :, :])),
+        MvNormal(gm.μ[2, :], Hermitian(gm.Σ[2, :, :]))],
+        gm.ϕ
     )
 
     log_logit_traits = rand(m, n)
@@ -155,7 +227,7 @@ function calc_relativetraits(; trait_data)
     nspecies, ntraits = size(trait_data)
 
     #### calculate extrema from more data
-    many_traits = random_traits(100)
+    many_traits = random_traits(100;)
     many_traits = Matrix(ustrip.(many_traits))
 
     for i in 1:ntraits
@@ -169,7 +241,7 @@ function calc_relativetraits(; trait_data)
     return trait_data
 end
 
-function prepare_validation_input(;
+function validation_input(;
         plotID,
         inf_p,
         nyears)
@@ -179,13 +251,13 @@ function prepare_validation_input(;
     water_reduction = true
     nutrient_reduction = true
 
-    clim_sub = @subset clim_df :plotID .== plotID
-    pet_sub = @subset pet_df first.(:explo) .== first(plotID)
-    par_sub = @subset par_df first.(:explo) .== first(plotID)
-    nut_sub = @subset nut_df :plotID .== plotID
-    soil_sub = @subset soil_df :plotID .== plotID
-    mow_sub = @subset mow_df :plotID .== plotID
-    graz_sub = @subset graz_df :plotID .== plotID
+    clim_sub = @subset dat.clim :plotID .== plotID
+    pet_sub = @subset dat.pet first.(:explo) .== first(plotID)
+    par_sub = @subset dat.par first.(:explo) .== first(plotID)
+    nut_sub = @subset dat.nut :plotID .== plotID
+    soil_sub = @subset dat.soil :plotID .== plotID
+    mow_sub = @subset dat.mow :plotID .== plotID
+    graz_sub = @subset dat.graz :plotID .== plotID
 
     ### ----------------- abiotic
     temperature = clim_sub.Ta_200 .* u"°C"
@@ -204,7 +276,7 @@ function prepare_validation_input(;
     root_depth = soil_sub.root_depth[1]
 
     ### ----------------- traits
-    traits = random_traits(nspecies);
+    traits = random_traits(nspecies;);
     sort!(traits, :SLA)
     relative_traits = calc_relativetraits(; trait_data=traits)
 
@@ -315,9 +387,9 @@ end
 
 
 function get_validation_data(; plotID)
-    soilwater_sub = @subset soilwater_df :plotID .== plotID
-    satbiomass_sub = @subset satbiomass_df :plotID .== plotID
-    measuredveg_sub = @subset measuredveg_df :plotID .== plotID
+    soilwater_sub = @subset dat.soilwater :plotID .== plotID
+    satbiomass_sub = @subset dat.satbiomass :plotID .== plotID
+    measuredveg_sub = @subset dat.measuredveg :plotID .== plotID
 
     return (;
         soil_moisture=soilwater_sub.soil_moisture,
@@ -337,14 +409,14 @@ function get_plottingdata(sim::Module;
     startyear,
     endyear)
 
-    ########################## Measured data
-    data = get_validation_data(; plotID)
-
     ########################## Run model
     nyears = length(startyear:endyear)
-    input_obj = prepare_validation_input(;
+    input_obj = validation_input(;
         plotID, nyears, inf_p)
     sol = sim.solve_prob(; input_obj);
+
+    ########################## Measured data
+    data = get_validation_data(; plotID)
 
     return data, sol
 end
@@ -353,8 +425,8 @@ end
 function loglikelihood_model(sim::Module;
         inf_p,
         plotID,
-        startyear,
-        endyear,
+        startyear=2012,
+        endyear=2021,
         inityears=5)
 
     inf_p = (; inf_p ...)
@@ -372,9 +444,9 @@ function loglikelihood_model(sim::Module;
         @error "Biomass sum isnan"
     end
 
-    # if iszero(biomass_sum[end])
-    #     return -Inf
-    # end
+    if iszero(biomass_sum[end])
+        return -Inf
+    end
     sim_biomass = biomass_sum[data.biomass_t]
     biomass_d = MvNormal(sim_biomass, inf_p.sigma_biomass * I)
     ll_biomass = logpdf(biomass_d, data.biomass)
