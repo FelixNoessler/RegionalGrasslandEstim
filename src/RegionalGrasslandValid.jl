@@ -224,7 +224,7 @@ end
 
 function calc_relativetraits(; trait_data)
     trait_data = ustrip.(trait_data)
-    nspecies, ntraits = size(trait_data)
+    ntraits = size(trait_data, 2)
 
     #### calculate extrema from more data
     many_traits = random_traits(100;)
@@ -266,8 +266,8 @@ function validation_input(;
     PAR = par_sub.PAR .* u"MJ / (d * m^2)"
     PET = pet_sub.PET .* u"mm / d"
     nutrient_index = nut_sub.n_index[1]
-    WHC = soil_sub.WHC[1] * u"mm" # 185u"mm"
-    PWP = soil_sub.PWP[1] * u"mm" # 85u"mm"
+    WHC = soil_sub.WHC[1] * u"mm"
+    PWP = soil_sub.PWP[1] * u"mm"
     Clay = soil_sub.Clay[1]
     Silt = soil_sub.Silt[1]
     Sand = soil_sub.Sand[1]
@@ -444,30 +444,35 @@ function loglikelihood_model(sim::Module;
         @error "Biomass sum isnan"
     end
 
-    if iszero(biomass_sum[end])
-        return -Inf
-    end
-    sim_biomass = biomass_sum[data.biomass_t]
+    # if iszero(biomass_sum[end])
+    #     return -Inf
+    # end
+    # sim_biomass = biomass_sum[data.biomass_t]
+
+    f = 1825 .> data.measured_biomass_t .> 0
+    sim_biomass = biomass_sum[data.measured_biomass_t[f]]
     biomass_d = MvNormal(sim_biomass, inf_p.sigma_biomass * I)
-    ll_biomass = logpdf(biomass_d, data.biomass)
+    # ll_biomass = logpdf(biomass_d, data.biomass)
+    ll_biomass = logpdf(biomass_d, data.measured_biomass[f])
+
 
     ###### evaporation
-    ll_evaporation = 0.0
-    evapo_index = .! ismissing.(data.evaporation)
-    if ! all(iszero.(evapo_index))
-        sim_evaporation = ustrip.(sol.evaporation[2:end])[1+365*inityears:end][evapo_index]
-        data_evaporation = float.(data.evaporation[evapo_index])
-        evaporation_d = MvNormal(sim_evaporation, inf_p.sigma_evaporation * I)
-        ll_evaporation = logpdf(evaporation_d, data_evaporation)
-    end
+    # ll_evaporation = 0.0
+    # evapo_index = .! ismissing.(data.evaporation)
+    # if ! all(iszero.(evapo_index))
+    #     sim_evaporation = ustrip.(sol.evaporation[2:end])[1+365*inityears:end][evapo_index]
+    #     data_evaporation = float.(data.evaporation[evapo_index])
+    #     evaporation_d = MvNormal(sim_evaporation, inf_p.sigma_evaporation * I)
+    #     ll_evaporation = logpdf(evaporation_d, data_evaporation)
+    # end
 
-    ###### soil moisture
-    sim_soilmoisture = ustrip.(sol.water)[2:end][1+365*inityears:end] ./ sol.p.site.root_depth .* inf_p.moisture_conv
-    soilmoisture_d = MvNormal(sim_soilmoisture, inf_p.sigma_soilmoisture * I)
-    ll_soilmoisture = logpdf(soilmoisture_d, data.soil_moisture)
+    # ###### soil moisture
+    # sim_soilmoisture = ustrip.(sol.water)[2:end][1+365*inityears:end] ./ sol.p.site.root_depth .* inf_p.moisture_conv
+    # soilmoisture_d = MvNormal(sim_soilmoisture, inf_p.sigma_soilmoisture * I)
+    # ll_soilmoisture = logpdf(soilmoisture_d, data.soil_moisture)
 
     ###### total log likelihood
-    ll = ll_biomass + ll_evaporation + ll_soilmoisture
+    ll = ll_biomass #+ ll_evaporation + ll_soilmoisture
 
     return ll
 end
